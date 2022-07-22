@@ -126,6 +126,7 @@ class OmeZarrWriter:
         channel_colors: Optional[List[int]],
         scale_num_levels: int = 1,
         scale_factor: float = 2.0,
+        storage_options: Optional[Dict] = None,
     ) -> None:
         """
         Write a data array to a file.
@@ -158,6 +159,9 @@ class OmeZarrWriter:
         scale_factor: Optional[float]
             The scale factor to use for the image. Only active if scale_num_levels > 1.
             Default: 2.0
+        storage_options: Optional[Dict]
+            Options to pass to the zarr storage backend, e.g., "compressor"
+            Default: None
 
         Examples
         --------
@@ -175,6 +179,8 @@ class OmeZarrWriter:
         ... writer.write_image(image0, "Image:0", ["C00","C01","C02"])
         ... writer.write_image(image1, "Image:1", ["C10","C11","C12"])
         """
+        if storage_options is None:
+            storage_options = {}
         if physical_pixel_sizes is None:
             pixelsizes = (1.0, 1.0, 1.0)
         else:
@@ -216,8 +222,8 @@ class OmeZarrWriter:
         target_chunk_size = 16 * (1024 * 1024)  # 16 MB
         nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
         nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
-        chunk_dims = [
-            dict(
+        options = []
+        opts = dict(
                 chunks=(
                     1,
                     1,
@@ -226,7 +232,8 @@ class OmeZarrWriter:
                     image_data.shape[4],
                 )
             )
-        ]
+        opts.update(storage_options)
+        options.append(opts)
         lasty = image_data.shape[3]
         lastx = image_data.shape[4]
         # TODO scaler might want to use different method for segmentations than raw
@@ -258,7 +265,9 @@ class OmeZarrWriter:
                 plane_size = lasty * lastx * image_data.itemsize
                 nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
                 nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
-                chunk_dims.append(dict(chunks=(1, 1, nplanes_per_chunk, lasty, lastx)))
+                opts = dict(chunks=(1, 1, nplanes_per_chunk, lasty, lastx))
+                opts.update(storage_options)
+                options.append(opts)
         else:
             scaler = None
 
@@ -296,5 +305,5 @@ class OmeZarrWriter:
             # match the number of datasets in a multiresolution pyramid. One can
             # provide different chunk size for each level of a pyramid using this
             # option.
-            storage_options=chunk_dims,
+            storage_options=options,
         )
