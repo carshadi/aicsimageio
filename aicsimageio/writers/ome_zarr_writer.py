@@ -126,6 +126,7 @@ class OmeZarrWriter:
         channel_colors: Optional[List[int]],
         scale_num_levels: int = 1,
         scale_factor: float = 2.0,
+        target_chunk_size: float = 16,  # MB
         storage_options: Optional[Dict] = None,
     ) -> None:
         """
@@ -219,7 +220,8 @@ class OmeZarrWriter:
         # (maybe ZYX dims or YX dims, or some byte size limit)
         # TODO precompute sizes for downsampled also.
         plane_size = image_data.shape[3] * image_data.shape[4] * image_data.itemsize
-        target_chunk_size = 16 * (1024 * 1024)  # 16 MB
+        # convert to bytes
+        target_chunk_size = target_chunk_size * (1024 * 1024)
         nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
         nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
         options = []
