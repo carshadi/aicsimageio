@@ -14,6 +14,80 @@ from ..utils import io_utils
 # from .writer import Writer
 
 
+def _compute_scales(image_data, scale_num_levels, scale_factor, pixelsizes, target_chunk_size):
+    transforms = [
+        [
+            # the voxel size for the first scale level
+            {
+                "type": "scale",
+                "scale": [
+                    1.0,
+                    1.0,
+                    pixelsizes[0],
+                    pixelsizes[1],
+                    pixelsizes[2],
+                ],
+            }
+        ]
+    ]
+    # TODO parameterize or construct a sensible guess
+    # (maybe ZYX dims or YX dims, or some byte size limit)
+    # TODO precompute sizes for downsampled also.
+    plane_size = image_data.shape[3] * image_data.shape[4] * image_data.itemsize
+    # convert to bytes
+    target_chunk_size = target_chunk_size * (1024 * 1024)
+    nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
+    nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
+    chunk_sizes = []
+    opts = dict(
+            chunks=(
+                1,
+                1,
+                nplanes_per_chunk,
+                image_data.shape[3],
+                image_data.shape[4],
+            )
+        )
+    chunk_sizes.append(opts)
+    lasty = image_data.shape[3]
+    lastx = image_data.shape[4]
+    # TODO scaler might want to use different method for segmentations than raw
+    # TODO control how many levels of zarr are created
+    if scale_num_levels > 1:
+        scaler = Scaler()
+        scaler.method = "nearest"
+        scaler.max_layer = scale_num_levels - 1
+        scaler.downscale = scale_factor if scale_factor is not None else 2
+        for i in range(scale_num_levels - 1):
+            last_transform = transforms[-1][0]
+            last_scale = typing.cast(List, last_transform["scale"])
+            transforms.append(
+                [
+                    {
+                        "type": "scale",
+                        "scale": [
+                            1.0,
+                            1.0,
+                            pixelsizes[0],
+                            last_scale[3] * scaler.downscale,
+                            last_scale[4] * scaler.downscale,
+                        ],
+                    }
+                ]
+            )
+            lasty = int(math.ceil(lasty / scaler.downscale))
+            lastx = int(math.ceil(lastx / scaler.downscale))
+            plane_size = lasty * lastx * image_data.itemsize
+            nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
+            nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
+            opts = dict(chunks=(1, 1, nplanes_per_chunk, lasty, lastx))
+            chunk_sizes.append(opts)
+    else:
+        scaler = None
+
+    return transforms, chunk_sizes, scaler
+
+
 class OmeZarrWriter:
     def __init__(self, uri: types.PathLike):
         """
@@ -201,77 +275,6 @@ class OmeZarrWriter:
             # TODO generate proper colors or confirm that the underlying lib can handle
             # None
             channel_colors = [i for i in range(image_data.shape[1])]
-        transforms = [
-            [
-                # the voxel size for the first scale level
-                {
-                    "type": "scale",
-                    "scale": [
-                        1.0,
-                        1.0,
-                        pixelsizes[0],
-                        pixelsizes[1],
-                        pixelsizes[2],
-                    ],
-                }
-            ]
-        ]
-        # TODO parameterize or construct a sensible guess
-        # (maybe ZYX dims or YX dims, or some byte size limit)
-        # TODO precompute sizes for downsampled also.
-        plane_size = image_data.shape[3] * image_data.shape[4] * image_data.itemsize
-        # convert to bytes
-        target_chunk_size = target_chunk_size * (1024 * 1024)
-        nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
-        nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
-        options = []
-        opts = dict(
-                chunks=(
-                    1,
-                    1,
-                    nplanes_per_chunk,
-                    image_data.shape[3],
-                    image_data.shape[4],
-                )
-            )
-        opts.update(storage_options)
-        options.append(opts)
-        lasty = image_data.shape[3]
-        lastx = image_data.shape[4]
-        # TODO scaler might want to use different method for segmentations than raw
-        # TODO control how many levels of zarr are created
-        if scale_num_levels > 1:
-            scaler = Scaler()
-            scaler.method = "nearest"
-            scaler.max_layer = scale_num_levels - 1
-            scaler.downscale = scale_factor if scale_factor is not None else 2
-            for i in range(scale_num_levels - 1):
-                last_transform = transforms[-1][0]
-                last_scale = typing.cast(List, last_transform["scale"])
-                transforms.append(
-                    [
-                        {
-                            "type": "scale",
-                            "scale": [
-                                1.0,
-                                1.0,
-                                pixelsizes[0],
-                                last_scale[3] * scaler.downscale,
-                                last_scale[4] * scaler.downscale,
-                            ],
-                        }
-                    ]
-                )
-                lasty = int(math.ceil(lasty / scaler.downscale))
-                lastx = int(math.ceil(lastx / scaler.downscale))
-                plane_size = lasty * lastx * image_data.itemsize
-                nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
-                nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
-                opts = dict(chunks=(1, 1, nplanes_per_chunk, lasty, lastx))
-                opts.update(storage_options)
-                options.append(opts)
-        else:
-            scaler = None
 
         # try to construct per-image metadata
         ome_json = OmeZarrWriter.build_ome(
@@ -292,6 +295,16 @@ class OmeZarrWriter:
             {"name": "x", "type": "space", "unit": "micrometer"},
         ]
 
+        transforms, chunk_opts, scaler = _compute_scales(
+            image_data,
+            scale_num_levels,
+            scale_factor,
+            pixelsizes,
+            target_chunk_size
+        )
+        for opt in chunk_opts:
+            opt.update(storage_options)
+
         # TODO image name must be unique within this root group
         group = self.root_group.create_group(image_name, overwrite=True)
         group.attrs["omero"] = ome_json
@@ -307,5 +320,6 @@ class OmeZarrWriter:
             # match the number of datasets in a multiresolution pyramid. One can
             # provide different chunk size for each level of a pyramid using this
             # option.
-            storage_options=options,
+            storage_options=chunk_opts,
         )
+
