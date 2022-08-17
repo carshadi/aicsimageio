@@ -80,6 +80,71 @@ def _compute_scales(scale_num_levels, scale_factor, pixelsizes, chunks):
     return transforms, chunk_sizes, scaler
 
 
+def _get_axes_5d(time_unit="millisecond", space_unit="micrometer"):
+    axes_5d = [
+        {"name": "t", "type": "time", "unit": f"{time_unit}"},
+        {"name": "c", "type": "channel"},
+        {"name": "z", "type": "space", "unit": f"{space_unit}"},
+        {"name": "y", "type": "space", "unit": f"{space_unit}"},
+        {"name": "x", "type": "space", "unit": f"{space_unit}"},
+    ]
+    return axes_5d
+
+
+def _ensure_storage_options(storage_options):
+    if storage_options is None:
+        storage_options = {}
+    return storage_options
+
+
+def _ensure_pixel_sizes(physical_pixel_sizes):
+    if physical_pixel_sizes is None:
+        pixelsizes = (1.0, 1.0, 1.0)
+    else:
+        pixelsizes = (
+            physical_pixel_sizes.Z if physical_pixel_sizes.Z is not None else 1.0,
+            physical_pixel_sizes.Y if physical_pixel_sizes.Y is not None else 1.0,
+            physical_pixel_sizes.X if physical_pixel_sizes.X is not None else 1.0,
+        )
+    return pixelsizes
+
+
+def _ensure_chunks(chunks, data, target_chunk_size=64):
+    if chunks is None:
+        plane_size = data.shape[3] * data.shape[4] * data.itemsize
+        # convert to bytes
+        target_chunk_size_bytes = target_chunk_size * (1024 * 1024)
+        nplanes_per_chunk = int(math.ceil(target_chunk_size_bytes / plane_size))
+        nplanes_per_chunk = min(nplanes_per_chunk, data.shape[2])
+        chunks = (
+            1,
+            1,
+            nplanes_per_chunk,
+            data.shape[3],
+            data.shape[4],
+        )
+    return chunks
+
+
+def _ensure_channel_colors(channel_colors, data):
+    if channel_colors is None:
+        # TODO generate proper colors or confirm that the underlying lib can handle
+        # None
+        channel_colors = [i for i in range(data.shape[1])]
+    return channel_colors
+
+
+def _ensure_channel_names(channel_names, data, image_name):
+    # TODO this isn't generating a very pretty looking name but it will be
+    # unique
+    if channel_names is None:
+        channel_names = [
+            utils.generate_ome_channel_id(image_id=image_name, channel_id=i)
+            for i in range(data.shape[1])
+        ]
+    return channel_names
+
+
 class OmeZarrWriter:
     def __init__(self, uri: types.PathLike):
         """
@@ -182,6 +247,60 @@ class OmeZarrWriter:
         }
         return omero
 
+    def write_multiscale(
+        self,
+        pyramid: List,
+        image_name: str,
+        physical_pixel_sizes: Optional[types.PhysicalPixelSizes],
+        channel_names: Optional[List[str]],
+        channel_colors: Optional[List[int]],
+        scale_factor: float = 2.0,
+        chunks: Optional[tuple] = None,
+        storage_options: Optional[Dict] = None,
+    ) -> None:
+
+        image_data = pyramid[0]
+        storage_options = _ensure_storage_options(storage_options)
+        channel_names = _ensure_channel_names(channel_names, image_data, image_name)
+        channel_colors = _ensure_channel_colors(channel_colors, image_data)
+        chunks = _ensure_chunks(chunks, image_data, target_chunk_size=64)
+        pixelsizes = _ensure_pixel_sizes(physical_pixel_sizes)
+
+        # try to construct per-image metadata
+        ome_json = OmeZarrWriter.build_ome(
+            image_data.shape,
+            image_name,
+            channel_names=channel_names,  # type: ignore
+            channel_colors=channel_colors,  # type: ignore
+            # This can be slow if computed here.
+            # TODO: Rely on user to supply the per-channel min/max.
+            channel_minmax=[(0.0, 1.0) for i in range(image_data.shape[1])],
+        )
+        # TODO user supplies units?
+        axes_5d = _get_axes_5d()
+
+        transforms, chunk_opts, scaler = _compute_scales(
+            len(pyramid),
+            scale_factor,
+            pixelsizes,
+            chunks
+        )
+        for opt in chunk_opts:
+            opt.update(storage_options)
+
+        # TODO image name must be unique within this root group
+        group = self.root_group.create_group(image_name, overwrite=True)
+        group.attrs["omero"] = ome_json
+        write_multiscale(
+            pyramid,
+            group=group,
+            fmt=CurrentFormat(),
+            axes=axes_5d,
+            coordinate_transformations=transforms,
+            storage_options=chunk_opts,
+            name=None,
+        )
+
     def write_image(
         self,
         image_data: typing.Union[types.ArrayLike, List],  # each ArrayLike must be 5D TCZYX
@@ -245,60 +364,24 @@ class OmeZarrWriter:
         ... writer.write_image(image0, "Image:0", ["C00","C01","C02"])
         ... writer.write_image(image1, "Image:1", ["C10","C11","C12"])
         """
-        if storage_options is None:
-            storage_options = {}
-        if physical_pixel_sizes is None:
-            pixelsizes = (1.0, 1.0, 1.0)
-        else:
-            pixelsizes = (
-                physical_pixel_sizes.Z if physical_pixel_sizes.Z is not None else 1.0,
-                physical_pixel_sizes.Y if physical_pixel_sizes.Y is not None else 1.0,
-                physical_pixel_sizes.X if physical_pixel_sizes.X is not None else 1.0,
-            )
-        full_res_image = image_data[0] if isinstance(image_data, list) else image_data
-        if channel_names is None:
-            # TODO this isn't generating a very pretty looking name but it will be
-            # unique
-            channel_names = [
-                utils.generate_ome_channel_id(image_id=image_name, channel_id=i)
-                for i in range(full_res_image.shape[1])
-            ]
-        if channel_colors is None:
-            # TODO generate proper colors or confirm that the underlying lib can handle
-            # None
-            channel_colors = [i for i in range(full_res_image.shape[1])]
-        if chunks is None:
-            plane_size = full_res_image.shape[3] * full_res_image.shape[4] * full_res_image.itemsize
-            # convert to bytes
-            target_chunk_size = 64 * (1024 * 1024)
-            nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
-            nplanes_per_chunk = min(nplanes_per_chunk, full_res_image.shape[2])
-            chunks = (
-                1,
-                1,
-                nplanes_per_chunk,
-                full_res_image.shape[3],
-                full_res_image.shape[4],
-            )
+        storage_options = _ensure_storage_options(storage_options)
+        channel_names = _ensure_channel_names(channel_names, image_data, image_name)
+        channel_colors = _ensure_channel_colors(channel_colors, image_data)
+        chunks = _ensure_chunks(chunks, image_data, target_chunk_size=64)
+        pixelsizes = _ensure_pixel_sizes(physical_pixel_sizes)
 
         # try to construct per-image metadata
         ome_json = OmeZarrWriter.build_ome(
-            full_res_image.shape,
+            image_data.shape,
             image_name,
             channel_names=channel_names,  # type: ignore
             channel_colors=channel_colors,  # type: ignore
             # This can be slow if computed here.
             # TODO: Rely on user to supply the per-channel min/max.
-            channel_minmax=[(0.0, 1.0) for i in range(full_res_image.shape[1])],
+            channel_minmax=[(0.0, 1.0) for i in range(image_data.shape[1])],
         )
         # TODO user supplies units?
-        axes_5d = [
-            {"name": "t", "type": "time", "unit": "millisecond"},
-            {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"},
-        ]
+        axes_5d = _get_axes_5d()
 
         transforms, chunk_opts, scaler = _compute_scales(
             scale_num_levels,
@@ -312,29 +395,17 @@ class OmeZarrWriter:
         # TODO image name must be unique within this root group
         group = self.root_group.create_group(image_name, overwrite=True)
         group.attrs["omero"] = ome_json
-        if isinstance(image_data, list):
-            write_multiscale(
-                image_data,
-                group=group,
-                fmt=CurrentFormat(),
-                axes=axes_5d,
-                coordinate_transformations=transforms,
-                storage_options=chunk_opts,
-                name=None,
-            )
-        else:
-            write_image(
-                image=image_data,
-                group=group,
-                scaler=scaler,
-                axes=axes_5d,
-                # For each resolution, we have a List of transformation Dicts (not
-                # validated). Each list of dicts are added to each datasets in order.
-                coordinate_transformations=transforms,
-                # Options to be passed on to the storage backend. A list would need to
-                # match the number of datasets in a multiresolution pyramid. One can
-                # provide different chunk size for each level of a pyramid using this
-                # option.
-                storage_options=chunk_opts,
-            )
-
+        write_image(
+            image=image_data,
+            group=group,
+            scaler=scaler,
+            axes=axes_5d,
+            # For each resolution, we have a List of transformation Dicts (not
+            # validated). Each list of dicts are added to each datasets in order.
+            coordinate_transformations=transforms,
+            # Options to be passed on to the storage backend. A list would need to
+            # match the number of datasets in a multiresolution pyramid. One can
+            # provide different chunk size for each level of a pyramid using this
+            # option.
+            storage_options=chunk_opts,
+        )
