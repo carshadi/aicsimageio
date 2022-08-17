@@ -3,9 +3,10 @@ import typing
 from typing import Dict, List, Optional, Tuple
 
 import zarr
+from ome_zarr.format import CurrentFormat
 from ome_zarr.io import parse_url
 from ome_zarr.scale import Scaler
-from ome_zarr.writer import write_image
+from ome_zarr.writer import write_image, write_multiscale
 
 from .. import types
 from ..metadata import utils
@@ -34,7 +35,6 @@ def _compute_scales(scale_num_levels, scale_factor, pixelsizes, chunks):
     lastz = chunks[2]
     lasty = chunks[3]
     lastx = chunks[4]
-    print(lastz, lasty, lastx)
     opts = dict(
         chunks=(
             1,
@@ -184,8 +184,7 @@ class OmeZarrWriter:
 
     def write_image(
         self,
-        # TODO how to pass in precomputed multiscales?
-        image_data: types.ArrayLike,  # must be 5D TCZYX
+        image_data: typing.Union[types.ArrayLike, List],  # each ArrayLike must be 5D TCZYX
         image_name: str,
         physical_pixel_sizes: Optional[types.PhysicalPixelSizes],
         channel_names: Optional[List[str]],
@@ -256,40 +255,41 @@ class OmeZarrWriter:
                 physical_pixel_sizes.Y if physical_pixel_sizes.Y is not None else 1.0,
                 physical_pixel_sizes.X if physical_pixel_sizes.X is not None else 1.0,
             )
+        full_res_image = image_data[0] if isinstance(image_data, list) else image_data
         if channel_names is None:
             # TODO this isn't generating a very pretty looking name but it will be
             # unique
             channel_names = [
                 utils.generate_ome_channel_id(image_id=image_name, channel_id=i)
-                for i in range(image_data.shape[1])
+                for i in range(full_res_image.shape[1])
             ]
         if channel_colors is None:
             # TODO generate proper colors or confirm that the underlying lib can handle
             # None
-            channel_colors = [i for i in range(image_data.shape[1])]
+            channel_colors = [i for i in range(full_res_image.shape[1])]
         if chunks is None:
-            plane_size = image_data.shape[3] * image_data.shape[4] * image_data.itemsize
+            plane_size = full_res_image.shape[3] * full_res_image.shape[4] * full_res_image.itemsize
             # convert to bytes
             target_chunk_size = 64 * (1024 * 1024)
             nplanes_per_chunk = int(math.ceil(target_chunk_size / plane_size))
-            nplanes_per_chunk = min(nplanes_per_chunk, image_data.shape[2])
+            nplanes_per_chunk = min(nplanes_per_chunk, full_res_image.shape[2])
             chunks = (
                 1,
                 1,
                 nplanes_per_chunk,
-                image_data.shape[3],
-                image_data.shape[4],
+                full_res_image.shape[3],
+                full_res_image.shape[4],
             )
 
         # try to construct per-image metadata
         ome_json = OmeZarrWriter.build_ome(
-            image_data.shape,
+            full_res_image.shape,
             image_name,
             channel_names=channel_names,  # type: ignore
             channel_colors=channel_colors,  # type: ignore
             # This can be slow if computed here.
             # TODO: Rely on user to supply the per-channel min/max.
-            channel_minmax=[(0.0, 1.0) for i in range(image_data.shape[1])],
+            channel_minmax=[(0.0, 1.0) for i in range(full_res_image.shape[1])],
         )
         # TODO user supplies units?
         axes_5d = [
@@ -312,18 +312,29 @@ class OmeZarrWriter:
         # TODO image name must be unique within this root group
         group = self.root_group.create_group(image_name, overwrite=True)
         group.attrs["omero"] = ome_json
-        write_image(
-            image=image_data,
-            group=group,
-            scaler=scaler,
-            axes=axes_5d,
-            # For each resolution, we have a List of transformation Dicts (not
-            # validated). Each list of dicts are added to each datasets in order.
-            coordinate_transformations=transforms,
-            # Options to be passed on to the storage backend. A list would need to
-            # match the number of datasets in a multiresolution pyramid. One can
-            # provide different chunk size for each level of a pyramid using this
-            # option.
-            storage_options=chunk_opts,
-        )
+        if isinstance(image_data, list):
+            write_multiscale(
+                image_data,
+                group=group,
+                fmt=CurrentFormat(),
+                axes=axes_5d,
+                coordinate_transformations=transforms,
+                storage_options=chunk_opts,
+                name=None,
+            )
+        else:
+            write_image(
+                image=image_data,
+                group=group,
+                scaler=scaler,
+                axes=axes_5d,
+                # For each resolution, we have a List of transformation Dicts (not
+                # validated). Each list of dicts are added to each datasets in order.
+                coordinate_transformations=transforms,
+                # Options to be passed on to the storage backend. A list would need to
+                # match the number of datasets in a multiresolution pyramid. One can
+                # provide different chunk size for each level of a pyramid using this
+                # option.
+                storage_options=chunk_opts,
+            )
 
