@@ -21,6 +21,7 @@ def _compute_scales(
     pixelsizes: Tuple[float, float, float],
     chunks: Tuple[int, int, int, int, int],
     data_shape: Tuple[int, int, int, int, int],
+    method: str = "nearest",
 ) -> Tuple[List, List, Scaler]:
     """Generate the list of coordinate transformations and associated chunk options.
 
@@ -30,6 +31,9 @@ def _compute_scales(
     scale_factor: a tuple of scale factors in each spatial dimension (Z, Y, X)
     pixelsizes: a list of pixel sizes in each spatial dimension (Z, Y, X)
     chunks: a 5D tuple of integers with size of each chunk dimension (T, C, Z, Y, X)
+    data_shape: a 5D tuple of the full resolution image's shape
+    method: scaler method, either "nearest" or "precomputed". Use "precomputed"
+            if writing a precomputed pyramid
 
     Returns
     -------
@@ -68,7 +72,7 @@ def _compute_scales(
     # TODO control how many levels of zarr are created
     if scale_num_levels > 1:
         scaler = Scaler()
-        scaler.method = "nearest"
+        scaler.method = method
         scaler.max_layer = scale_num_levels - 1
         # choose the largest factor, generally either all factors are the same or Z is 1.
         if scaler.method == "nearest":
@@ -282,7 +286,7 @@ class OmeZarrWriter:
         physical_pixel_sizes: Optional[types.PhysicalPixelSizes],
         channel_names: Optional[List[str]],
         channel_colors: Optional[List[int]],
-        scale_factor: Tuple[float, float, float] = (1.0, 2.0, 2.0),
+        scale_factor: Tuple[float, float, float] = (2.0, 2.0, 2.0),
         chunks: Optional[tuple] = None,
         storage_options: Optional[Dict] = None,
     ) -> None:
@@ -312,7 +316,8 @@ class OmeZarrWriter:
             scale_factor,
             pixelsizes,
             chunks,
-            image_data.shape
+            image_data.shape,
+            method="precomputed",
         )
         for opt in chunk_opts:
             opt.update(storage_options)
@@ -338,7 +343,7 @@ class OmeZarrWriter:
         channel_names: Optional[List[str]],
         channel_colors: Optional[List[int]],
         scale_num_levels: int = 1,
-        scale_factor: Tuple[float, float, float] = (1.0, 2.0, 2.0),
+        scale_factor: float = 2.0,
         chunks: Optional[tuple] = None,
         storage_options: Optional[Dict] = None,
     ) -> None:
@@ -417,10 +422,11 @@ class OmeZarrWriter:
 
         transforms, chunk_opts, scaler = _compute_scales(
             scale_num_levels,
-            scale_factor,
+            (scale_factor,) * 3,
             pixelsizes,
             chunks,
-            image_data.shape
+            image_data.shape,
+            method="nearest",
         )
         for opt in chunk_opts:
             opt.update(storage_options)
