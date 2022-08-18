@@ -71,7 +71,9 @@ def _compute_scales(
         scaler.method = "nearest"
         scaler.max_layer = scale_num_levels - 1
         # choose the largest factor, generally either all factors are the same or Z is 1.
-        is_nearest = (scaler.method == "nearest")
+        if scaler.method == "nearest":
+            scale_factor = list(scale_factor)
+            scale_factor[0] = 1.0
         scaler.downscale = max(scale_factor) if scale_factor is not None else 2
         for i in range(scale_num_levels - 1):
             last_transform = transforms[-1][0]
@@ -83,14 +85,14 @@ def _compute_scales(
                         "scale": [
                             1.0,
                             1.0,
-                            last_scale[2] if is_nearest else (last_scale[2] * scale_factor[0]),
+                            last_scale[2] * scale_factor[0],
                             last_scale[3] * scale_factor[1],
                             last_scale[4] * scale_factor[2],
                         ],
                     }
                 ]
             )
-            lastz = int(math.ceil(lastz if is_nearest else (lastz / scale_factor[0])))
+            lastz = int(math.ceil(lastz / scale_factor[0]))
             lasty = int(math.ceil(lasty / scale_factor[1]))
             lastx = int(math.ceil(lastx / scale_factor[2]))
             opts = dict(chunks=(
