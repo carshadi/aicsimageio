@@ -15,7 +15,25 @@ from ..utils import io_utils
 # from .writer import Writer
 
 
-def _compute_scales(scale_num_levels, scale_factor, pixelsizes, chunks):
+def _compute_scales(
+    scale_num_levels: int,
+    scale_factor: Tuple[float, float, float],
+    pixelsizes: Tuple[float, float, float],
+    chunks: Tuple[int, int, int, int, int]
+) -> Tuple[List, List, Scaler]:
+    """Generate the list of coordinate transformations and associated chunk options.
+
+    Parameters
+    ----------
+    scale_num_levels: the number of downsampling levels
+    scale_factor: a tuple of scale factors in each spatial dimension (Z, Y, X)
+    pixelsizes: a list of pixel sizes in each spatial dimension (Z, Y, X)
+    chunks: a 5D tuple of integers with size of each chunk dimension (T, C, Z, Y, X)
+
+    Returns
+    -------
+    A tuple of the coordinate transforms, chunk options, and the Scaler instance
+    """
     transforms = [
         [
             # the voxel size for the first scale level
@@ -51,7 +69,9 @@ def _compute_scales(scale_num_levels, scale_factor, pixelsizes, chunks):
         scaler = Scaler()
         scaler.method = "nearest"
         scaler.max_layer = scale_num_levels - 1
-        scaler.downscale = scale_factor if scale_factor is not None else 2
+        # choose the largest factor, generally either all factors are the same or Z is 1.
+        is_nearest = (scaler.method == "nearest")
+        scaler.downscale = max(scale_factor) if scale_factor is not None else 2
         for i in range(scale_num_levels - 1):
             last_transform = transforms[-1][0]
             last_scale = typing.cast(List, last_transform["scale"])
@@ -62,16 +82,16 @@ def _compute_scales(scale_num_levels, scale_factor, pixelsizes, chunks):
                         "scale": [
                             1.0,
                             1.0,
-                            last_scale[2] * scaler.downscale,
-                            last_scale[3] * scaler.downscale,
-                            last_scale[4] * scaler.downscale,
+                            last_scale[2] * 1 if is_nearest else scale_factor[0],
+                            last_scale[3] * scale_factor[1],
+                            last_scale[4] * scale_factor[2],
                         ],
                     }
                 ]
             )
-            lastz = int(math.ceil(lastz / scaler.downscale))
-            lasty = int(math.ceil(lasty / scaler.downscale))
-            lastx = int(math.ceil(lastx / scaler.downscale))
+            lastz = int(math.ceil(lastz / 1 if is_nearest else scale_factor[0]))
+            lasty = int(math.ceil(lasty / scale_factor[1]))
+            lastx = int(math.ceil(lastx / scale_factor[2]))
             opts = dict(chunks=(1, 1, lastz, lasty, lastx))
             chunk_sizes.append(opts)
     else:
@@ -254,7 +274,7 @@ class OmeZarrWriter:
         physical_pixel_sizes: Optional[types.PhysicalPixelSizes],
         channel_names: Optional[List[str]],
         channel_colors: Optional[List[int]],
-        scale_factor: float = 2.0,
+        scale_factor: Tuple[float, float, float] = (1.0, 2.0, 2.0),
         chunks: Optional[tuple] = None,
         storage_options: Optional[Dict] = None,
     ) -> None:
@@ -303,13 +323,13 @@ class OmeZarrWriter:
 
     def write_image(
         self,
-        image_data: typing.Union[types.ArrayLike, List],  # each ArrayLike must be 5D TCZYX
+        image_data: types.ArrayLike,  # each ArrayLike must be 5D TCZYX
         image_name: str,
         physical_pixel_sizes: Optional[types.PhysicalPixelSizes],
         channel_names: Optional[List[str]],
         channel_colors: Optional[List[int]],
         scale_num_levels: int = 1,
-        scale_factor: float = 2.0,
+        scale_factor: Tuple[float, float, float] = (1.0, 2.0, 2.0),
         chunks: Optional[tuple] = None,
         storage_options: Optional[Dict] = None,
     ) -> None:
@@ -341,9 +361,12 @@ class OmeZarrWriter:
         scale_num_levels: Optional[int]
             Number of pyramid levels to use for the image.
             Default: 1 (represents no downsampled levels)
-        scale_factor: Optional[float]
-            The scale factor to use for the image. Only active if scale_num_levels > 1.
-            Default: 2.0
+        scale_factor: Optional[Tuple[float]]
+            The scale factors to use for each spatial dimension the image,
+            in Z,Y,X order.
+            Only active if scale_num_levels > 1.
+            If "nearest" scaling is used (default), the first scale factor is overridden to 1.0
+            Default: (1.0, 2.0, 2.0)
         storage_options: Optional[Dict]
             Options to pass to the zarr storage backend, e.g., "compressor"
             Default: None
