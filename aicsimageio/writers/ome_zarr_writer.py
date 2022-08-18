@@ -19,7 +19,8 @@ def _compute_scales(
     scale_num_levels: int,
     scale_factor: Tuple[float, float, float],
     pixelsizes: Tuple[float, float, float],
-    chunks: Tuple[int, int, int, int, int]
+    chunks: Tuple[int, int, int, int, int],
+    data_shape: Tuple[int, int, int, int, int],
 ) -> Tuple[List, List, Scaler]:
     """Generate the list of coordinate transformations and associated chunk options.
 
@@ -50,16 +51,16 @@ def _compute_scales(
         ]
     ]
     chunk_sizes = []
-    lastz = chunks[2]
-    lasty = chunks[3]
-    lastx = chunks[4]
+    lastz = data_shape[2]
+    lasty = data_shape[3]
+    lastx = data_shape[4]
     opts = dict(
         chunks=(
             1,
             1,
-            lastz,
-            lasty,
-            lastx,
+            min(lastz, chunks[2]),
+            min(lasty, chunks[3]),
+            min(lastx, chunks[4]),
         )
     )
     chunk_sizes.append(opts)
@@ -92,7 +93,12 @@ def _compute_scales(
             lastz = int(math.ceil(lastz if is_nearest else (lastz / scale_factor[0])))
             lasty = int(math.ceil(lasty / scale_factor[1]))
             lastx = int(math.ceil(lastx / scale_factor[2]))
-            opts = dict(chunks=(1, 1, lastz, lasty, lastx))
+            opts = dict(chunks=(
+                1,
+                1,
+                min(lastz, chunks[2]),
+                min(lasty, chunks[3]),
+                min(lastx, chunks[4])))
             chunk_sizes.append(opts)
     else:
         scaler = None
@@ -303,7 +309,8 @@ class OmeZarrWriter:
             len(pyramid),
             scale_factor,
             pixelsizes,
-            chunks
+            chunks,
+            image_data.shape
         )
         for opt in chunk_opts:
             opt.update(storage_options)
@@ -410,7 +417,8 @@ class OmeZarrWriter:
             scale_num_levels,
             scale_factor,
             pixelsizes,
-            chunks
+            chunks,
+            image_data.shape
         )
         for opt in chunk_opts:
             opt.update(storage_options)
