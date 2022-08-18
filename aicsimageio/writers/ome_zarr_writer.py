@@ -89,7 +89,7 @@ def _compute_scales(
                     }
                 ]
             )
-            lastz = int(math.ceil(lastz / 1 if is_nearest else scale_factor[0]))
+            lastz = int(math.ceil(lastz if is_nearest else (lastz / scale_factor[0])))
             lasty = int(math.ceil(lasty / scale_factor[1]))
             lastx = int(math.ceil(lastx / scale_factor[2]))
             opts = dict(chunks=(1, 1, lastz, lasty, lastx))
