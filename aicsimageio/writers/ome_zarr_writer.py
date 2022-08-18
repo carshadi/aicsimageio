@@ -82,7 +82,7 @@ def _compute_scales(
                         "scale": [
                             1.0,
                             1.0,
-                            last_scale[2] * 1 if is_nearest else scale_factor[0],
+                            last_scale[2] if is_nearest else (last_scale[2] * scale_factor[0]),
                             last_scale[3] * scale_factor[1],
                             last_scale[4] * scale_factor[2],
                         ],
