@@ -289,7 +289,8 @@ class OmeZarrWriter:
         scale_factor: Tuple[float, float, float] = (2.0, 2.0, 2.0),
         chunks: Optional[tuple] = None,
         storage_options: Optional[Dict] = None,
-    ) -> None:
+        compute_dask:bool=False
+    ) -> List:
 
         image_data = pyramid[0]
         storage_options = _ensure_storage_options(storage_options)
@@ -325,7 +326,7 @@ class OmeZarrWriter:
         # TODO image name must be unique within this root group
         group = self.root_group.create_group(image_name, overwrite=True)
         group.attrs["omero"] = ome_json
-        write_multiscale(
+        jobs = write_multiscale(
             pyramid,
             group=group,
             fmt=CurrentFormat(),
@@ -333,7 +334,10 @@ class OmeZarrWriter:
             coordinate_transformations=transforms,
             storage_options=chunk_opts,
             name=None,
+            compute_dask=compute_dask
         )
+        
+        return jobs
 
     def write_image(
         self,
