@@ -1,6 +1,6 @@
 import math
 import typing
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import zarr
 from ome_zarr.format import CurrentFormat
@@ -289,7 +289,8 @@ class OmeZarrWriter:
         scale_factor: Tuple[float, float, float] = (2.0, 2.0, 2.0),
         chunks: Optional[tuple] = None,
         storage_options: Optional[Dict] = None,
-        compute_dask:bool=False
+        compute_dask:bool=False,
+        **metadata: Union[str, Dict[str, Any], List[Dict[str, Any]]]
     ) -> List:
 
         image_data = pyramid[0]
@@ -334,7 +335,8 @@ class OmeZarrWriter:
             coordinate_transformations=transforms,
             storage_options=chunk_opts,
             name=None,
-            compute_dask=compute_dask
+            compute_dask=compute_dask,
+            **metadata
         )
         
         return jobs
