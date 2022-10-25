@@ -21,7 +21,7 @@ def _compute_scales(
     pixelsizes: Tuple[float, float, float],
     chunks: Tuple[int, int, int, int, int],
     data_shape: Tuple[int, int, int, int, int],
-    translation: Tuple[float, float, float],
+    translation: Optional[List[float]] = None,
     method: str = "nearest",
 ) -> Tuple[List, List, Scaler]:
     """Generate the list of coordinate transformations and associated chunk options.
@@ -52,13 +52,14 @@ def _compute_scales(
                     pixelsizes[1],
                     pixelsizes[2],
                 ],
-            },
-            {
-                "type": "translation",
-                "translation": translation
             }
         ]
     ]
+    if translation is not None:
+        transforms[0].append({
+            "type": "translation",
+            "translation": translation
+        })
     chunk_sizes = []
     lastz = data_shape[2]
     lasty = data_shape[3]
@@ -98,13 +99,14 @@ def _compute_scales(
                             last_scale[3] * scale_factor[1],
                             last_scale[4] * scale_factor[2],
                         ],
-                    },
-                    {
-                        "type": "translation",
-                        "translation": translation
                     }
                 ]
             )
+            if translation is not None:
+                transforms[-1].append({
+                    "type": "translation",
+                    "translation": translation
+                })
             lastz = int(math.ceil(lastz / scale_factor[0]))
             lasty = int(math.ceil(lasty / scale_factor[1]))
             lastx = int(math.ceil(lastx / scale_factor[2]))
@@ -151,9 +153,7 @@ def _ensure_pixel_sizes(physical_pixel_sizes):
 
 
 def _ensure_translation(translation, data):
-    if translation is None:
-        translation = [0,] * data.ndim
-    if not len(translation) == data.ndim:
+    if translation is not None and len(translation) != data.ndim:
         raise ValueError("Length of translation vector must match data dimensions.")
     return translation
 
