@@ -21,6 +21,7 @@ def _compute_scales(
     pixelsizes: Tuple[float, float, float],
     chunks: Tuple[int, int, int, int, int],
     data_shape: Tuple[int, int, int, int, int],
+    translation: Tuple[float, float, float],
     method: str = "nearest",
 ) -> Tuple[List, List, Scaler]:
     """Generate the list of coordinate transformations and associated chunk options.
@@ -51,6 +52,10 @@ def _compute_scales(
                     pixelsizes[1],
                     pixelsizes[2],
                 ],
+            },
+            {
+                "type": "translation",
+                "translation": translation
             }
         ]
     ]
@@ -93,6 +98,10 @@ def _compute_scales(
                             last_scale[3] * scale_factor[1],
                             last_scale[4] * scale_factor[2],
                         ],
+                    },
+                    {
+                        "type": "translation",
+                        "translation": translation
                     }
                 ]
             )
@@ -139,6 +148,14 @@ def _ensure_pixel_sizes(physical_pixel_sizes):
             physical_pixel_sizes.X if physical_pixel_sizes.X is not None else 1.0,
         )
     return pixelsizes
+
+
+def _ensure_translation(translation, data):
+    if translation is None:
+        translation = [0,] * data.ndim
+    if not len(translation) == data.ndim:
+        raise ValueError("Length of translation vector must match data dimensions.")
+    return translation
 
 
 def _ensure_chunks(chunks, data, target_chunk_size=64):
@@ -284,12 +301,13 @@ class OmeZarrWriter:
         pyramid: List,
         image_name: str,
         physical_pixel_sizes: Optional[types.PhysicalPixelSizes],
+        translation: Optional[List[float]],
         channel_names: Optional[List[str]],
         channel_colors: Optional[List[int]],
         scale_factor: Tuple[float, float, float] = (2.0, 2.0, 2.0),
         chunks: Optional[tuple] = None,
         storage_options: Optional[Dict] = None,
-        compute_dask:bool=False,
+        compute_dask: bool = False,
         **metadata: Union[str, Dict[str, Any], List[Dict[str, Any]]]
     ) -> List:
 
@@ -299,6 +317,7 @@ class OmeZarrWriter:
         channel_colors = _ensure_channel_colors(channel_colors, image_data)
         chunks = _ensure_chunks(chunks, image_data, target_chunk_size=64)
         pixelsizes = _ensure_pixel_sizes(physical_pixel_sizes)
+        translation = _ensure_translation(translation, image_data)
 
         # try to construct per-image metadata
         ome_json = OmeZarrWriter.build_ome(
@@ -319,6 +338,7 @@ class OmeZarrWriter:
             pixelsizes,
             chunks,
             image_data.shape,
+            translation,
             method="precomputed",
         )
         for opt in chunk_opts:
@@ -338,7 +358,7 @@ class OmeZarrWriter:
             compute_dask=compute_dask,
             **metadata
         )
-        
+
         return jobs
 
     def write_image(
@@ -346,6 +366,7 @@ class OmeZarrWriter:
         image_data: types.ArrayLike,  # each ArrayLike must be 5D TCZYX
         image_name: str,
         physical_pixel_sizes: Optional[types.PhysicalPixelSizes],
+        translation: Optional[List[float]],
         channel_names: Optional[List[str]],
         channel_colors: Optional[List[int]],
         scale_num_levels: int = 1,
@@ -412,6 +433,7 @@ class OmeZarrWriter:
         channel_colors = _ensure_channel_colors(channel_colors, image_data)
         chunks = _ensure_chunks(chunks, image_data, target_chunk_size=64)
         pixelsizes = _ensure_pixel_sizes(physical_pixel_sizes)
+        translation = _ensure_translation(translation, image_data)
 
         # try to construct per-image metadata
         ome_json = OmeZarrWriter.build_ome(
@@ -432,6 +454,7 @@ class OmeZarrWriter:
             pixelsizes,
             chunks,
             image_data.shape,
+            translation,
             method="nearest",
         )
         for opt in chunk_opts:
